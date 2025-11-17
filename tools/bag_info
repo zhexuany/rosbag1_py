@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""
+Display information about bag files.
+
+Usage:
+    bag_info my_bag.mcap
+    bag_info my_bag.bag --storage-id rosbag
+"""
+
+import argparse
+import sys
+from rosbag1_py._info import get_bag_info
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Display bag file information')
+    parser.add_argument('bag_file', help='Bag file to inspect')
+    parser.add_argument('--storage-id', default='mcap', choices=['mcap', 'rosbag'],
+                       help='Storage format')
+    
+    args = parser.parse_args()
+    
+    try:
+        info = get_bag_info(args.bag_file, args.storage_id)
+        
+        print(f"Bag: {info['path']}")
+        print(f"Format: {info['storage_id']}")
+        print(f"Messages: {info['message_count']}")
+        print(f"Duration: {info['duration']:.2f} seconds")
+        print(f"Topics: {len(info['topics'])}")
+        
+        if info['topics']:
+            print("\nTopics:")
+            for topic in info['topics']:
+                print(f"  {topic['name']} ({topic['type']}): {topic['message_count']} messages")
+        
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+

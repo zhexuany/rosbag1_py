@@ -1,0 +1,46 @@
+services:
+  # Development environment
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: rosbag1-dev
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    environment:
+      - ROS_DISTRO=noetic
+      - PYTHONUNBUFFERED=1
+    # For macOS, use bridge network instead of host
+    ports:
+      - "11311:11311"  # ROS master port
+    command: /bin/bash
+
+  # Test runner service
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: rosbag1-test
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    environment:
+      - ROS_DISTRO=noetic
+      - PYTHONUNBUFFERED=1
+      - WITH_COVERAGE=${WITH_COVERAGE:-0}
+    command: /workspace/scripts/docker_test.sh
+
+  # Builder service (for building only)
+  builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: rosbag1-builder
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    environment:
+      - ROS_DISTRO=noetic
+    command: /workspace/scripts/docker_build.sh
+

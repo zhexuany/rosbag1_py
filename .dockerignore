@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# CMake (keep CMakeLists.txt for caching)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/_build/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.mcap
+*.bag
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker (keep Dockerfile for build)
+.dockerignore
+
+# Build outputs (will be generated in container)
+rosbag1_py/*.so
+rosbag1_py/rosbag1_py_cpp*

@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""
+Validate bag files.
+
+Usage:
+    bag_validate my_bag.mcap
+    bag_validate my_bag.bag --storage-id rosbag
+"""
+
+import argparse
+import sys
+from rosbag1_py.utils.validation import validate_bag
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Validate bag files')
+    parser.add_argument('bag_file', help='Bag file to validate')
+    parser.add_argument('--storage-id', default='mcap', choices=['mcap', 'rosbag'],
+                       help='Storage format')
+    
+    args = parser.parse_args()
+    
+    try:
+        result = validate_bag(args.bag_file, args.storage_id)
+        
+        if result['valid']:
+            print(f"✓ Bag is valid")
+            print(f"  Messages: {result['message_count']}")
+            print(f"  Topics: {result['topic_count']}")
+            print(f"  Duration: {result['duration']:.2f} seconds")
+            
+            if result['warnings']:
+                print("\nWarnings:")
+                for warning in result['warnings']:
+                    print(f"  - {warning}")
+            
+            return 0
+        else:
+            print(f"✗ Bag is invalid")
+            print("\nErrors:")
+            for error in result['errors']:
+                print(f"  - {error}")
+            
+            if result['warnings']:
+                print("\nWarnings:")
+                for warning in result['warnings']:
+                    print(f"  - {warning}")
+            
+            return 1
+    except Exception as e:
+        print(f"Error during validation: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+

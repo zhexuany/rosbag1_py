@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "cmake>=3.15", "pybind11>=2.10.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rosbag1_py"
+version = "1.0.0"
+description = "Production-ready Python API for ROS1 bag recording with MCAP support"
+readme = "README.md"
+requires-python = ">=3.6"
+dependencies = [
+    "pybind11>=2.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+

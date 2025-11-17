@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""
+Convert bags between ROS1 and ROS2 formats.
+
+Usage:
+    bag_convert --input my_ros1_bag.bag --output my_ros2_bag.mcap --target-ros 2
+    bag_convert --input my_ros2_bag.mcap --output my_ros1_bag.bag --target-ros 1
+"""
+
+import argparse
+import sys
+import rospy
+from rosbag1_py.utils.migration import convert_bag
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Convert bags between ROS1 and ROS2')
+    parser.add_argument('--input', required=True, help='Input bag file')
+    parser.add_argument('--output', required=True, help='Output bag file')
+    parser.add_argument('--target-ros', type=int, choices=[1, 2], required=True,
+                       help='Target ROS version (1 or 2)')
+    parser.add_argument('--compress', help='Compression format (lz4, zstd, bz2)')
+    
+    args = parser.parse_args()
+    
+    # Initialize ROS node (needed for message handling)
+    rospy.init_node('bag_converter', anonymous=True, disable_signals=True)
+    
+    try:
+        convert_bag(args.input, args.output, args.target_ros)
+    except Exception as e:
+        print(f"Error during conversion: {e}", file=sys.stderr)
+        return 1
+    
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+
