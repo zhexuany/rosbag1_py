@@ -1,4 +1,19 @@
+// Copyright 2025 Zhexuan Yang
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "rosbag1_py/converter.hpp"
+#include "rosbag1_py/constants.hpp"
 #include <map>
 #include <sstream>
 #include <algorithm>
@@ -110,12 +125,12 @@ std::vector<uint8_t> SerializationConverter::remove_cdr_header(const std::vector
 
 // Time converter implementation
 uint64_t TimeConverter::ros1_to_nanoseconds(uint32_t sec, uint32_t nsec) {
-    return static_cast<uint64_t>(sec) * 1000000000ULL + static_cast<uint64_t>(nsec);
+    return static_cast<uint64_t>(sec) * NANOSECONDS_PER_SECOND + static_cast<uint64_t>(nsec);
 }
 
 std::pair<uint32_t, uint32_t> TimeConverter::nanoseconds_to_ros1(uint64_t nanoseconds) {
-    uint32_t sec = static_cast<uint32_t>(nanoseconds / 1000000000ULL);
-    uint32_t nsec = static_cast<uint32_t>(nanoseconds % 1000000000ULL);
+    uint32_t sec = static_cast<uint32_t>(nanoseconds / NANOSECONDS_PER_SECOND);
+    uint32_t nsec = static_cast<uint32_t>(nanoseconds % NANOSECONDS_PER_SECOND);
     return {sec, nsec};
 }
 

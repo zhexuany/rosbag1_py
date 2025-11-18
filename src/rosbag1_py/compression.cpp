@@ -1,7 +1,22 @@
+// Copyright 2025 Zhexuan Yang
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "rosbag1_py/compression.hpp"
 #include <stdexcept>
 #include <map>
 #include <functional>
+#include <mutex>
 #include <cstring>
 
 // Compression library headers
@@ -263,16 +278,21 @@ public:
 
 // Compression factory implementation
 static std::map<std::string, std::function<std::unique_ptr<CompressionInterface>()>> factories;
+static std::once_flag factories_init_flag;
+static std::mutex factories_mutex;
+
+static void initialize_factories() {
+    // Register default compressors
+    factories["bz2"] = []() { return std::make_unique<BZ2Compression>(); };
+    factories["lz4"] = []() { return std::make_unique<LZ4Compression>(); };
+    factories["zstd"] = []() { return std::make_unique<ZSTDCompression>(); };
+    factories["gzip"] = []() { return std::make_unique<GZIPCompression>(); };
+}
 
 std::unique_ptr<CompressionInterface> CompressionFactory::create(const std::string& name) {
-    if (factories.empty()) {
-        // Register default compressors
-        factories["bz2"] = []() { return std::make_unique<BZ2Compression>(); };
-        factories["lz4"] = []() { return std::make_unique<LZ4Compression>(); };
-        factories["zstd"] = []() { return std::make_unique<ZSTDCompression>(); };
-        factories["gzip"] = []() { return std::make_unique<GZIPCompression>(); };
-    }
+    std::call_once(factories_init_flag, initialize_factories);
     
+    std::lock_guard<std::mutex> lock(factories_mutex);
     auto it = factories.find(name);
     if (it == factories.end()) {
         throw std::runtime_error("Unknown compression type: " + name);
@@ -282,11 +302,9 @@ std::unique_ptr<CompressionInterface> CompressionFactory::create(const std::stri
 }
 
 bool CompressionFactory::is_available(const std::string& name) {
-    if (factories.empty()) {
-        // Initialize factories
-        create("bz2");  // This will register them
-    }
+    std::call_once(factories_init_flag, initialize_factories);
     
+    std::lock_guard<std::mutex> lock(factories_mutex);
     return factories.find(name) != factories.end();
 }
 
@@ -294,6 +312,9 @@ void CompressionFactory::register_compression(
     const std::string& name,
     std::function<std::unique_ptr<CompressionInterface>()> factory
 ) {
+    std::call_once(factories_init_flag, initialize_factories);
+    
+    std::lock_guard<std::mutex> lock(factories_mutex);
     factories[name] = factory;
 }
 

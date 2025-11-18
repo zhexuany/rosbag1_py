@@ -1,3 +1,17 @@
+# Copyright 2025 Zhexuan Yang
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Python wrapper for C++ Reader class.
 """
@@ -46,6 +60,50 @@ class Reader:
         """Close bag."""
         self._cpp_reader.close()
     
+    def _read_messages_callback(self, callback, topic_filters):
+        """Internal method for callback-based reading (not a generator)."""
+        # Convert C++ MessageData to Python MessageData in callback wrapper
+        def wrapped_callback(cpp_msg):
+            msg_data = MessageData(
+                topic=cpp_msg.topic,
+                data=bytes(cpp_msg.data),
+                timestamp_ns=cpp_msg.timestamp_ns,
+                type=cpp_msg.type,
+                serialization_format=cpp_msg.serialization_format
+            )
+            callback(msg_data)
+        
+        self._cpp_reader.read_messages_with_callback(wrapped_callback, topic_filters)
+    
+    def _read_messages_iterator(self, topic_filters, start_time, end_time):
+        """Internal method for iterator-based reading (generator)."""
+        # Convert times to nanoseconds
+        start_time_ns = 0
+        end_time_ns = 2**64 - 1  # UINT64_MAX
+        
+        if start_time is not None:
+            start_time_ns = start_time.secs * 1_000_000_000 + start_time.nsecs
+        
+        if end_time is not None:
+            end_time_ns = end_time.secs * 1_000_000_000 + end_time.nsecs
+        
+        # Read messages from C++ reader
+        cpp_messages = self._cpp_reader.read_messages(
+            topic_filters,
+            start_time_ns,
+            end_time_ns
+        )
+        
+        # Convert to Python MessageData
+        for cpp_msg in cpp_messages:
+            yield MessageData(
+                topic=cpp_msg.topic,
+                data=bytes(cpp_msg.data),
+                timestamp_ns=cpp_msg.timestamp_ns,
+                type=cpp_msg.type,
+                serialization_format=cpp_msg.serialization_format
+            )
+    
     def is_open(self) -> bool:
         """Check if bag is open."""
         return self._cpp_reader.is_open()
@@ -82,52 +140,13 @@ class Reader:
         
         # Check if first argument is a callable (callback function)
         if callable(callback_or_filters):
-            # Callback-based reading
-            callback = callback_or_filters
+            # Callback-based reading - call non-generator method
             filters = topic_filters or []
-            
-            # Convert C++ MessageData to Python MessageData in callback wrapper
-            def wrapped_callback(cpp_msg):
-                msg_data = MessageData(
-                    topic=cpp_msg.topic,
-                    data=bytes(cpp_msg.data),
-                    timestamp_ns=cpp_msg.timestamp_ns,
-                    type=cpp_msg.type,
-                    serialization_format=cpp_msg.serialization_format
-                )
-                callback(msg_data)
-            
-            self._cpp_reader.read_messages_with_callback(wrapped_callback, filters)
+            return self._read_messages_callback(callback_or_filters, filters)
         else:
-            # Iterator-based reading
-            topic_filters = callback_or_filters if callback_or_filters is not None else (topic_filters or [])
-            
-            # Convert times to nanoseconds
-            start_time_ns = 0
-            end_time_ns = 2**64 - 1  # UINT64_MAX
-            
-            if start_time is not None:
-                start_time_ns = start_time.secs * 1_000_000_000 + start_time.nsecs
-            
-            if end_time is not None:
-                end_time_ns = end_time.secs * 1_000_000_000 + end_time.nsecs
-            
-            # Read messages from C++ reader
-            cpp_messages = self._cpp_reader.read_messages(
-                topic_filters,
-                start_time_ns,
-                end_time_ns
-            )
-            
-            # Convert to Python MessageData
-            for cpp_msg in cpp_messages:
-                yield MessageData(
-                    topic=cpp_msg.topic,
-                    data=bytes(cpp_msg.data),
-                    timestamp_ns=cpp_msg.timestamp_ns,
-                    type=cpp_msg.type,
-                    serialization_format=cpp_msg.serialization_format
-                )
+            # Iterator-based reading - call generator method
+            filters = callback_or_filters if callback_or_filters is not None else (topic_filters or [])
+            return self._read_messages_iterator(filters, start_time, end_time)
     
     def get_metadata(self):
         """Get bag metadata."""

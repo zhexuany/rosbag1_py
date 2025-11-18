@@ -1,3 +1,17 @@
+# Copyright 2025 Zhexuan Yang
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Python wrapper for C++ Writer class.
 """
@@ -45,6 +59,131 @@ class StorageOptions:
         cpp_opts.append = self.append
         cpp_opts.custom_data = self.custom_data
         return cpp_opts
+    
+    def set_mcap_options(
+        self,
+        preset_profile: Optional[str] = None,
+        noChunkCRC: Optional[bool] = None,
+        noAttachmentCRC: Optional[bool] = None,
+        enableDataCRC: Optional[bool] = None,
+        noSummaryCRC: Optional[bool] = None,
+        noChunking: Optional[bool] = None,
+        noMessageIndex: Optional[bool] = None,
+        noSummary: Optional[bool] = None,
+        noMetadataIndex: Optional[bool] = None,
+        noChunkIndex: Optional[bool] = None,
+        noStatistics: Optional[bool] = None,
+        noSummaryOffsets: Optional[bool] = None,
+        forceCompression: Optional[bool] = None,
+        chunkSize: Optional[int] = None,
+        compression: Optional[str] = None,
+        compressionLevel: Optional[int] = None
+    ):
+        """
+        Set MCAP writer options.
+        
+        Args:
+            preset_profile: Preset profile name ("fastwrite", "none", or None for custom)
+            noChunkCRC: Disable CRC calculation for Chunks
+            noAttachmentCRC: Disable CRC calculation for Attachments
+            enableDataCRC: Enable CRC calculation for the entire Data section
+            noSummaryCRC: Disable CRC calculation for the Summary section
+            noChunking: Do not write Chunks, write records directly into Data section
+            noMessageIndex: Do not write Message Index records
+            noSummary: Do not write Summary section
+            noMetadataIndex: Advanced option
+            noChunkIndex: Advanced option
+            noStatistics: Advanced option
+            noSummaryOffsets: Advanced option
+            forceCompression: Force compression even for small chunks
+            chunkSize: Chunk size in bytes (default: 786432 = 768KB)
+            compression: Compression type ("None", "Lz4", "Zstd")
+            compressionLevel: Compression level (-1 for default)
+        """
+        if preset_profile is not None:
+            self.custom_data["mcap_preset_profile"] = preset_profile
+        
+        if noChunkCRC is not None:
+            self.custom_data["mcap_noChunkCRC"] = str(noChunkCRC).lower()
+        if noAttachmentCRC is not None:
+            self.custom_data["mcap_noAttachmentCRC"] = str(noAttachmentCRC).lower()
+        if enableDataCRC is not None:
+            self.custom_data["mcap_enableDataCRC"] = str(enableDataCRC).lower()
+        if noSummaryCRC is not None:
+            self.custom_data["mcap_noSummaryCRC"] = str(noSummaryCRC).lower()
+        if noChunking is not None:
+            self.custom_data["mcap_noChunking"] = str(noChunking).lower()
+        if noMessageIndex is not None:
+            self.custom_data["mcap_noMessageIndex"] = str(noMessageIndex).lower()
+        if noSummary is not None:
+            self.custom_data["mcap_noSummary"] = str(noSummary).lower()
+        if noMetadataIndex is not None:
+            self.custom_data["mcap_noMetadataIndex"] = str(noMetadataIndex).lower()
+        if noChunkIndex is not None:
+            self.custom_data["mcap_noChunkIndex"] = str(noChunkIndex).lower()
+        if noStatistics is not None:
+            self.custom_data["mcap_noStatistics"] = str(noStatistics).lower()
+        if noSummaryOffsets is not None:
+            self.custom_data["mcap_noSummaryOffsets"] = str(noSummaryOffsets).lower()
+        if forceCompression is not None:
+            self.custom_data["mcap_forceCompression"] = str(forceCompression).lower()
+        
+        if chunkSize is not None:
+            self.custom_data["mcap_chunkSize"] = str(chunkSize)
+        if compression is not None:
+            self.custom_data["mcap_compression"] = compression
+        if compressionLevel is not None:
+            self.custom_data["mcap_compressionLevel"] = str(compressionLevel)
+    
+    def load_mcap_config_file(self, config_file: str):
+        """
+        Load MCAP writer options from a YAML config file.
+        
+        Args:
+            config_file: Path to YAML config file
+            
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If YAML parsing fails (when PyYAML is not available)
+        """
+        import os
+        if not os.path.exists(config_file):
+            raise FileNotFoundError(f"Config file not found: {config_file}")
+        
+        try:
+            import yaml
+            with open(config_file, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            if not isinstance(config, dict):
+                raise ValueError("Config file must contain a dictionary")
+            
+            # Load all options from YAML into custom_data
+            for key, value in config.items():
+                if isinstance(value, bool):
+                    self.custom_data[f"mcap_{key}"] = str(value).lower()
+                elif isinstance(value, (int, float)):
+                    self.custom_data[f"mcap_{key}"] = str(value)
+                elif isinstance(value, str):
+                    self.custom_data[f"mcap_{key}"] = value
+                else:
+                    # Skip non-scalar values
+                    continue
+                    
+        except ImportError:
+            # PyYAML not available, try simple key-value parsing
+            with open(config_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"\'')
+                        self.custom_data[f"mcap_{key}"] = value
+        except Exception as e:
+            raise ValueError(f"Failed to parse config file: {e}")
 
 
 class ConverterOptions:

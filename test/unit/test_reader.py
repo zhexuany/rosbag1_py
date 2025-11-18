@@ -170,7 +170,7 @@ class TestReader(unittest.TestCase):
         messages_received = []
         def callback(msg_data):
             messages_received.append(msg_data)
-        
+
         reader.read_messages(callback, topic_filters=['/topic1'])
         reader.close()
         
@@ -214,6 +214,53 @@ class TestReader(unittest.TestCase):
         topic_counts = {name: count for name, _, count in metadata.topics_with_message_count}
         self.assertEqual(topic_counts.get('/topic1', 0), 5, "Topic1 should have 5 messages")
         self.assertEqual(topic_counts.get('/topic2', 0), 3, "Topic2 should have 3 messages")
+    
+    def test_read_messages_not_open(self):
+        """Test read_messages raises error when not open"""
+        reader = Reader()
+        
+        with self.assertRaises(RuntimeError):
+            list(reader.read_messages())
+    
+    def test_read_messages_with_callback_not_open(self):
+        """Test callback-based read_messages raises error when not open"""
+        reader = Reader()
+        
+        def callback(msg):
+            pass
+        
+        with self.assertRaises(RuntimeError):
+            reader.read_messages(callback)
+    
+    def test_timestamp_property(self):
+        """Test MessageData timestamp property"""
+        # Create and write a message
+        writer = Writer()
+        storage_opts = StorageOptions(uri=self.bag_path, storage_id='mcap')
+        writer.open(storage_opts)
+        
+        topic_meta = TopicMetadata(id=0, name='/test', type='std_msgs/String', serialization_format='cdr')
+        writer.create_topic(topic_meta)
+        
+        msg = String()
+        msg.data = "test"
+        writer.write_message('/test', msg)
+        writer.close()
+        
+        # Read and check timestamp
+        reader = Reader()
+        reader.open(storage_opts)
+        
+        messages = list(reader.read_messages())
+        reader.close()
+        
+        self.assertEqual(len(messages), 1)
+        msg_data = messages[0]
+        
+        # Check timestamp property converts correctly
+        timestamp = msg_data.timestamp
+        self.assertIsInstance(timestamp, rospy.Time)
+        self.assertGreater(timestamp.to_sec(), 0)
 
 
 if __name__ == '__main__':

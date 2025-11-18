@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2025 Zhexuan Yang
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Setup script for rosbag1_py package.
 Builds C++ extension using CMake and pybind11.
@@ -7,17 +21,15 @@ Builds C++ extension using CMake and pybind11.
 import os
 import sys
 import subprocess
-import shutil
 from pathlib import Path
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
-from setuptools.command.build_py import build_py
 
 
 class CMakeExtension(Extension):
     """CMake extension for setuptools."""
     
-    def __init__(self, name, sourcedir=''):
+    def __init__(self, name, sourcedir='.'):
         Extension.__init__(self, name, sources=[])
         self.sourcedir = os.path.abspath(sourcedir)
 
@@ -43,12 +55,15 @@ class CMakeBuild(build_ext):
         os.makedirs(self.build_temp, exist_ok=True)
         
         # CMake configure
+        # Allow BUILD_TESTING to be controlled via environment variable
+        build_testing = os.environ.get('BUILD_TESTING', 'OFF')
         cmake_args = [
             f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}',
             f'-DPYTHON_EXECUTABLE={sys.executable}',
             '-DCMAKE_BUILD_TYPE=Release',
-            # Skip building tests during pip install (tests are built separately)
-            '-DBUILD_TESTING=OFF',
+            f'-DBUILD_TESTING={build_testing}',
+            # Workaround for old system googletest compatibility issue
+            '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
         ]
         
         # Source ROS1 environment
@@ -95,20 +110,11 @@ setup(
     description='Production-ready Python API for ROS1 bag recording with MCAP support',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    author='rosbag1_py contributors',
+    author='Zhexuan Yang',
     python_requires='>=3.6',
     packages=['rosbag1_py', 'rosbag1_py.compatibility', 'rosbag1_py.services', 'rosbag1_py.utils'],
-    ext_modules=[CMakeExtension('rosbag1_py_cpp', '.')],
+    ext_modules=[CMakeExtension('rosbag1_py.rosbag1_py_cpp')],
     cmdclass={'build_ext': CMakeBuild},
-    install_requires=[
-        'pybind11>=2.10.0',
-    ],
-    extras_require={
-        'dev': [
-            'pytest>=6.0',
-            'pytest-cov',
-        ],
-    },
     zip_safe=False,
 )
 

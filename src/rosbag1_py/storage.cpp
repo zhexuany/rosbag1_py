@@ -1,3 +1,17 @@
+// Copyright 2025 Zhexuan Yang
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "rosbag1_py/storage.hpp"
 #include <stdexcept>
 #include <fstream>
@@ -6,6 +20,8 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <algorithm>
+#include <cctype>
 
 // MCAP is a header-only library, but requires MCAP_IMPLEMENTATION to be defined
 // in exactly one source file to instantiate the implementation
@@ -16,6 +32,138 @@
 // Status is defined in writer.hpp and reader.hpp
 
 namespace rosbag1_py {
+
+// Helper function to parse boolean from string
+static bool parse_bool(const std::string& value, bool default_val = false) {
+    if (value.empty()) return default_val;
+    std::string lower = value;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return (lower == "true" || lower == "1" || lower == "yes" || lower == "on");
+}
+
+// Helper function to parse integer from string
+static int parse_int(const std::string& value, int default_val = 0) {
+    if (value.empty()) return default_val;
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return default_val;
+    }
+}
+
+// Helper function to parse uint64_t from string
+static uint64_t parse_uint64(const std::string& value, uint64_t default_val = 0) {
+    if (value.empty()) return default_val;
+    try {
+        return std::stoull(value);
+    } catch (...) {
+        return default_val;
+    }
+}
+
+// Parse MCAP writer options from custom_data map
+McapWriterOptions parse_mcap_writer_options(const std::map<std::string, std::string>& custom_data) {
+    McapWriterOptions opts;
+    
+    // Set defaults to match current behavior for backward compatibility
+    opts.compression = "Zstd";
+    opts.chunkSize = 1024;  // 1KB chunks - small to ensure chunking happens
+    opts.noChunkCRC = false;
+    opts.noSummaryCRC = false;
+    
+    // Check for preset profile first
+    std::string preset = "";
+    auto preset_it = custom_data.find("mcap_preset_profile");
+    if (preset_it == custom_data.end()) {
+        preset_it = custom_data.find("preset_profile");
+    }
+    if (preset_it != custom_data.end()) {
+        preset = preset_it->second;
+        std::transform(preset.begin(), preset.end(), preset.begin(), ::tolower);
+    }
+    
+    // Apply preset profile defaults
+    if (preset == "fastwrite") {
+        opts.noChunking = true;
+        opts.noSummaryCRC = true;
+        opts.preset_profile = "fastwrite";
+    } else if (preset == "none") {
+        // Use defaults (already set)
+        opts.preset_profile = "none";
+    }
+    
+    // Helper lambda to get option value (check both with and without mcap_ prefix)
+    auto get_option = [&custom_data](const std::string& key) -> std::string {
+        auto it = custom_data.find("mcap_" + key);
+        if (it != custom_data.end()) return it->second;
+        it = custom_data.find(key);
+        if (it != custom_data.end()) return it->second;
+        return "";
+    };
+    
+    // Parse boolean options (only override if explicitly set)
+    std::string val = get_option("noChunkCRC");
+    if (!val.empty()) opts.noChunkCRC = parse_bool(val);
+    
+    val = get_option("noAttachmentCRC");
+    if (!val.empty()) opts.noAttachmentCRC = parse_bool(val);
+    
+    val = get_option("enableDataCRC");
+    if (!val.empty()) opts.enableDataCRC = parse_bool(val);
+    
+    val = get_option("noSummaryCRC");
+    if (!val.empty()) opts.noSummaryCRC = parse_bool(val);
+    
+    val = get_option("noChunking");
+    if (!val.empty()) opts.noChunking = parse_bool(val);
+    
+    val = get_option("noMessageIndex");
+    if (!val.empty()) opts.noMessageIndex = parse_bool(val);
+    
+    val = get_option("noSummary");
+    if (!val.empty()) opts.noSummary = parse_bool(val);
+    
+    val = get_option("noMetadataIndex");
+    if (!val.empty()) opts.noMetadataIndex = parse_bool(val);
+    
+    val = get_option("noChunkIndex");
+    if (!val.empty()) opts.noChunkIndex = parse_bool(val);
+    
+    val = get_option("noStatistics");
+    if (!val.empty()) opts.noStatistics = parse_bool(val);
+    
+    val = get_option("noSummaryOffsets");
+    if (!val.empty()) opts.noSummaryOffsets = parse_bool(val);
+    
+    val = get_option("forceCompression");
+    if (!val.empty()) opts.forceCompression = parse_bool(val);
+    
+    // Parse numeric options
+    val = get_option("chunkSize");
+    if (!val.empty()) opts.chunkSize = parse_uint64(val, 1024);  // Default 1KB for backward compatibility
+    
+    val = get_option("compressionLevel");
+    if (!val.empty()) opts.compressionLevel = parse_int(val, -1);
+    
+    // Parse compression type
+    val = get_option("compression");
+    if (!val.empty()) {
+        std::string comp_lower = val;
+        std::transform(comp_lower.begin(), comp_lower.end(), comp_lower.begin(), ::tolower);
+        if (comp_lower == "none" || comp_lower == "0") {
+            opts.compression = "None";
+        } else if (comp_lower == "lz4" || comp_lower == "1") {
+            opts.compression = "Lz4";
+        } else if (comp_lower == "zstd" || comp_lower == "2") {
+            opts.compression = "Zstd";
+        } else {
+            // Keep original value (capitalized)
+            opts.compression = val;
+        }
+    }
+    
+    return opts;
+}
 
 // MCAP storage implementation using MCAP C++ library
 class McapStorage : public StorageInterface {
@@ -52,9 +200,50 @@ public:
             }
             
                 writer_ = std::make_unique<mcap::McapWriter>();
-                mcap::McapWriterOptions writer_options("ros1");  // Use ROS1 profile
-                // Enable compression for better file size (optional)
-                writer_options.compression = mcap::Compression::Zstd;
+                
+                // Parse MCAP writer options from custom_data
+                McapWriterOptions mcap_opts = parse_mcap_writer_options(options.custom_data);
+                
+                // Create MCAP writer options with ROS1 profile
+                mcap::McapWriterOptions writer_options("ros1");
+                
+                // Apply parsed options
+                writer_options.noChunkCRC = mcap_opts.noChunkCRC;
+                writer_options.noAttachmentCRC = mcap_opts.noAttachmentCRC;
+                writer_options.enableDataCRC = mcap_opts.enableDataCRC;
+                writer_options.noSummaryCRC = mcap_opts.noSummaryCRC;
+                writer_options.noChunking = mcap_opts.noChunking;
+                writer_options.noMessageIndex = mcap_opts.noMessageIndex;
+                writer_options.noSummary = mcap_opts.noSummary;
+                writer_options.noMetadataIndex = mcap_opts.noMetadataIndex;
+                writer_options.noChunkIndex = mcap_opts.noChunkIndex;
+                writer_options.noStatistics = mcap_opts.noStatistics;
+                writer_options.noSummaryOffsets = mcap_opts.noSummaryOffsets;
+                writer_options.forceCompression = mcap_opts.forceCompression;
+                writer_options.chunkSize = mcap_opts.chunkSize;
+                // Convert compression level int to enum (if -1, use default)
+                if (mcap_opts.compressionLevel == -1) {
+                    // Use default compression level
+                    writer_options.compressionLevel = mcap::CompressionLevel::Default;
+                } else {
+                    // Cast int to enum (MCAP uses enum class for compression level)
+                    writer_options.compressionLevel = static_cast<mcap::CompressionLevel>(mcap_opts.compressionLevel);
+                }
+                
+                // Convert compression string to enum
+                if (mcap_opts.compression == "None" || mcap_opts.compression == "none") {
+                    writer_options.compression = mcap::Compression::None;
+                } else if (mcap_opts.compression == "Lz4" || mcap_opts.compression == "lz4") {
+                    writer_options.compression = mcap::Compression::Lz4;
+                } else if (mcap_opts.compression == "Zstd" || mcap_opts.compression == "zstd") {
+                    writer_options.compression = mcap::Compression::Zstd;
+                } else {
+                    // Default to Zstd if unknown
+                    writer_options.compression = mcap::Compression::Zstd;
+                }
+                
+                // NOTE: MCAP automatically writes summary/index on close() if chunks were written
+                // The summary section is what allows fast topic discovery
                 // In MCAP v2.1.1, writer_->open() returns void - errors are handled via exceptions
                 try {
                     writer_->open(*output_stream_, writer_options);
@@ -84,23 +273,13 @@ public:
             
             // Read existing topics/channels and count messages
             // Channels should be available from summary after open() if summary exists
-            std::cerr << "[DEBUG get_topics] Initial reader_->channels().size() = " << reader_->channels().size() << std::endl;
-            
-            // If channels are empty, try to read summary explicitly
-            // MCAP v2.x might need explicit summary reading in some cases
-            if (reader_->channels().empty()) {
-                std::cerr << "[DEBUG get_topics] Channels empty, checking summary..." << std::endl;
-                // Try to access summary - this might trigger loading channels
-                auto summary_opt = reader_->summary();
-                if (summary_opt.has_value()) {
-                    std::cerr << "[DEBUG get_topics] Summary exists, channels().size() = " << reader_->channels().size() << std::endl;
-                } else {
-                    std::cerr << "[DEBUG get_topics] No summary found" << std::endl;
-                }
-            }
+            // If channels are empty, the file might not have a summary or it's a streaming file
+            // MCAP v2.x: channels should be loaded from summary during open() if summary exists
+            // However, if the file has no messages, channels might not be discovered by reading messages
+            // In that case, we need to rely on the summary being read properly
+            // But MCAP's open() should read the summary automatically if it exists
             
             for (const auto& [channel_id, channel] : reader_->channels()) {
-                std::cerr << "[DEBUG get_topics] Found channel ID " << channel_id << " -> topic '" << channel->topic << "'" << std::endl;
                 TopicMetadata topic;
                 topic.id = channel_id;
                 topic.name = channel->topic;
@@ -192,21 +371,15 @@ public:
                 }
             } else {
                 // No statistics available, need to read through file
-                std::cerr << "[DEBUG get_topics] No statistics, channels().size() = " << reader_->channels().size() << std::endl;
                 // First ensure we have channels
                 if (reader_->channels().empty()) {
-                    std::cerr << "[DEBUG get_topics] Channels empty, reading messages to discover..." << std::endl;
                     // Read through messages to discover channels
                     // Note: If file has no messages, channels might be in summary but not loaded yet
                     // Try reading summary explicitly first
                     auto message_view = reader_->readMessages();
-                    bool has_messages = false;
                     for (const auto& msg_view : message_view) {
-                        has_messages = true;
                         (void)msg_view;  // Just iterate to discover channels
                     }
-                    std::cerr << "[DEBUG get_topics] After discovery, channels().size() = " << reader_->channels().size() 
-                              << ", has_messages = " << has_messages << std::endl;
                     
                     // If still no channels and no messages, the file might have channels in summary
                     // but they weren't loaded. Try to access them directly.
@@ -215,9 +388,7 @@ public:
                 }
                 
                 // Update topics_ from discovered channels
-                std::cerr << "[DEBUG get_topics] Updating topics_ from channels, channels().size() = " << reader_->channels().size() << std::endl;
                 for (const auto& [channel_id, channel] : reader_->channels()) {
-                    std::cerr << "[DEBUG get_topics] Adding topic: Channel ID " << channel_id << " -> '" << channel->topic << "'" << std::endl;
                     if (topics_.find(channel->topic) == topics_.end()) {
                         TopicMetadata topic;
                         topic.id = channel_id;
@@ -271,12 +442,6 @@ public:
                         channel_id_to_topic[channel_id] = channel->topic;
                     }
                     
-                    // Debug: Print channel-to-topic mapping after discovery
-                    std::cerr << "[DEBUG] Channel-to-topic mapping after discovery (size=" << channel_id_to_topic.size() << "):" << std::endl;
-                    for (const auto& [ch_id, topic_name] : channel_id_to_topic) {
-                        std::cerr << "  Channel ID " << ch_id << " -> " << topic_name << std::endl;
-                    }
-                    
                     // Close and reopen to reset position for counting
                     reader_->close();
                     input_stream_->close();
@@ -289,12 +454,6 @@ public:
                     // Update map with any channels that are now available from summary
                     for (const auto& [channel_id, channel] : reader_->channels()) {
                         channel_id_to_topic[channel_id] = channel->topic;
-                    }
-                    
-                    // Debug: Print channel-to-topic mapping after reopening
-                    std::cerr << "[DEBUG] Channel-to-topic mapping after reopen (size=" << channel_id_to_topic.size() << "):" << std::endl;
-                    for (const auto& [ch_id, topic_name] : channel_id_to_topic) {
-                        std::cerr << "  Channel ID " << ch_id << " -> " << topic_name << std::endl;
                     }
                     
                     auto message_view = reader_->readMessages();
@@ -313,9 +472,6 @@ public:
                                 std::string topic_name = discovered_channel_it->second->topic;
                                 channel_id_to_topic[msg.message.channelId] = topic_name;
                                 channel_it = channel_id_to_topic.find(msg.message.channelId);
-                                std::cerr << "[DEBUG] Message " << msg_index << ": Discovered channel " << msg.message.channelId << " -> " << topic_name << std::endl;
-                            } else {
-                                std::cerr << "[DEBUG] Message " << msg_index << ": Channel " << msg.message.channelId << " not found, skipping" << std::endl;
                             }
                         }
                         if (channel_it != channel_id_to_topic.end()) {
@@ -323,21 +479,12 @@ public:
                             topic_message_counts_[topic_name]++;
                             message_count_++;
                             
-                            std::cerr << "[DEBUG] Message " << msg_index << ": Channel ID " << msg.message.channelId 
-                                      << " -> Topic '" << topic_name << "' (count now: " << topic_message_counts_[topic_name] << ")" << std::endl;
-                            
                             if (first_message) {
                                 start_time_ns_ = msg.message.logTime;
                                 first_message = false;
                             }
                             end_time_ns_ = msg.message.logTime;
                         }
-                    }
-                    
-                    // Debug: Print final counts
-                    std::cerr << "[DEBUG] Final topic message counts:" << std::endl;
-                    for (const auto& [topic_name, count] : topic_message_counts_) {
-                        std::cerr << "  " << topic_name << ": " << count << std::endl;
                     }
                 }
             }
@@ -583,14 +730,19 @@ public:
                 mode |= std::ios::app;
             } else {
                 mode |= std::ios::trunc;
-                // Write header only if creating new file
-                std::ofstream file(filename, mode);
-                if (!file.is_open()) {
-                    return false;
-                }
-                file.write("#ROSBAG", 7);
-                file.close();
             }
+            // Open persistent file handle for writing
+            output_file_ = std::make_unique<std::ofstream>(filename, mode);
+            if (!output_file_->is_open()) {
+                output_file_.reset();
+                return false;
+            }
+            // Write header only if creating new file
+            if (!file_exists) {
+                output_file_->write("#ROSBAG", 7);
+                output_file_->flush();
+            }
+            is_writing_ = true;
         }
         
         filename_ = filename;
@@ -599,14 +751,13 @@ public:
     }
     
     void close() override {
-        if (is_open_ && !filename_.empty()) {
-            // Ensure file exists and is closed properly
-            std::ofstream file(filename_, std::ios::binary | std::ios::app);
-            if (file.is_open()) {
-                file.close();
-            }
+        if (output_file_ && output_file_->is_open()) {
+            output_file_->flush();
+            output_file_->close();
+            output_file_.reset();
         }
         is_open_ = false;
+        is_writing_ = false;
     }
     
     bool is_open() const override {
@@ -616,20 +767,17 @@ public:
     void create_topic(const TopicMetadata& topic) override {
         topics_[topic.name] = topic;
         // Write topic metadata to file so reader can load it
-        if (is_open_ && !filename_.empty()) {
-            std::ofstream file(filename_, std::ios::binary | std::ios::app);
-            if (file.is_open()) {
-                // Write topic marker: 'T' + [id][name_len][name][type_len][type]
-                file.write("T", 1);
-                file.write(reinterpret_cast<const char*>(&topic.id), sizeof(topic.id));
-                uint32_t name_len = static_cast<uint32_t>(topic.name.size());
-                file.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
-                file.write(topic.name.c_str(), name_len);
-                uint32_t type_len = static_cast<uint32_t>(topic.type.size());
-                file.write(reinterpret_cast<const char*>(&type_len), sizeof(type_len));
-                file.write(topic.type.c_str(), type_len);
-                file.close();
-            }
+        if (is_open_ && is_writing_ && output_file_ && output_file_->is_open()) {
+            // Write topic marker: 'T' + [id][name_len][name][type_len][type]
+            output_file_->write("T", 1);
+            output_file_->write(reinterpret_cast<const char*>(&topic.id), sizeof(topic.id));
+            uint32_t name_len = static_cast<uint32_t>(topic.name.size());
+            output_file_->write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
+            output_file_->write(topic.name.c_str(), name_len);
+            uint32_t type_len = static_cast<uint32_t>(topic.type.size());
+            output_file_->write(reinterpret_cast<const char*>(&type_len), sizeof(type_len));
+            output_file_->write(topic.type.c_str(), type_len);
+            output_file_->flush();
         }
     }
     
@@ -639,25 +787,23 @@ public:
         size_t data_size,
         uint64_t timestamp_ns
     ) override {
-        if (!is_open_) {
-            throw std::runtime_error("Storage is not open");
+        if (!is_open_ || !is_writing_) {
+            throw std::runtime_error("Storage is not open for writing");
         }
-        // Append message data to file (minimal implementation for testing)
-        if (!filename_.empty()) {
-            std::ofstream file(filename_, std::ios::binary | std::ios::app);
-            if (file.is_open()) {
-                // Write message marker 'M' + [topic_len][topic][msg_size][data][timestamp]
-                file.write("M", 1);
-                uint32_t topic_len = static_cast<uint32_t>(topic.size());
-                file.write(reinterpret_cast<const char*>(&topic_len), sizeof(topic_len));
-                file.write(topic.c_str(), topic_len);
-                uint32_t msg_size = static_cast<uint32_t>(data_size);
-                file.write(reinterpret_cast<const char*>(&msg_size), sizeof(msg_size));
-                file.write(reinterpret_cast<const char*>(data), data_size);
-                file.write(reinterpret_cast<const char*>(&timestamp_ns), sizeof(timestamp_ns));
-                file.close();
-            }
+        if (!output_file_ || !output_file_->is_open()) {
+            throw std::runtime_error("Output file is not open");
         }
+        
+        // Write message marker 'M' + [topic_len][topic][msg_size][data][timestamp]
+        output_file_->write("M", 1);
+        uint32_t topic_len = static_cast<uint32_t>(topic.size());
+        output_file_->write(reinterpret_cast<const char*>(&topic_len), sizeof(topic_len));
+        output_file_->write(topic.c_str(), topic_len);
+        uint32_t msg_size = static_cast<uint32_t>(data_size);
+        output_file_->write(reinterpret_cast<const char*>(&msg_size), sizeof(msg_size));
+        output_file_->write(reinterpret_cast<const char*>(data), data_size);
+        output_file_->write(reinterpret_cast<const char*>(&timestamp_ns), sizeof(timestamp_ns));
+        output_file_->flush();
         
         if (message_count_ == 0) {
             start_time_ns_ = timestamp_ns;
@@ -698,6 +844,8 @@ private:
     std::map<std::string, uint64_t> topic_message_counts_;
     std::string filename_;
     bool is_open_ = false;
+    bool is_writing_ = false;
+    std::unique_ptr<std::ofstream> output_file_;
     uint64_t message_count_ = 0;
     uint64_t start_time_ns_ = 0;
     uint64_t end_time_ns_ = 0;
@@ -730,15 +878,17 @@ public:
         
         if (is_writing_) {
             // Open for writing - create file if needed
-            std::ofstream file(filename, std::ios::binary | std::ios::app);
-            if (!file.is_open()) {
+            std::ios::openmode mode = std::ios::binary | std::ios::app;
+            output_file_ = std::make_unique<std::ofstream>(filename, mode);
+            if (!output_file_->is_open()) {
+                output_file_.reset();
                 return false;
             }
             if (!file_exists) {
                 // Write SQLITE header marker
-                file.write("SQLITE", 6);
+                output_file_->write("SQLITE", 6);
+                output_file_->flush();
             }
-            file.close();
         } else {
             // Open for reading
             std::ifstream file(filename, std::ios::binary);
@@ -790,14 +940,13 @@ public:
     }
     
     void close() override {
-        if (is_open_ && !filename_.empty() && is_writing_) {
-            // Ensure file is properly closed
-            std::ofstream file(filename_, std::ios::binary | std::ios::app);
-            if (file.is_open()) {
-                file.close();
-            }
+        if (output_file_ && output_file_->is_open()) {
+            output_file_->flush();
+            output_file_->close();
+            output_file_.reset();
         }
         is_open_ = false;
+        is_writing_ = false;
     }
     
     bool is_open() const override {
@@ -806,19 +955,16 @@ public:
     
     void create_topic(const TopicMetadata& topic) override {
         topics_[topic.name] = topic;
-        if (is_open_ && is_writing_ && !filename_.empty()) {
-            std::ofstream file(filename_, std::ios::binary | std::ios::app);
-            if (file.is_open()) {
-                file.write("T", 1);
-                file.write(reinterpret_cast<const char*>(&topic.id), sizeof(topic.id));
-                uint32_t name_len = static_cast<uint32_t>(topic.name.size());
-                file.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
-                file.write(topic.name.c_str(), name_len);
-                uint32_t type_len = static_cast<uint32_t>(topic.type.size());
-                file.write(reinterpret_cast<const char*>(&type_len), sizeof(type_len));
-                file.write(topic.type.c_str(), type_len);
-                file.close();
-            }
+        if (is_open_ && is_writing_ && output_file_ && output_file_->is_open()) {
+            output_file_->write("T", 1);
+            output_file_->write(reinterpret_cast<const char*>(&topic.id), sizeof(topic.id));
+            uint32_t name_len = static_cast<uint32_t>(topic.name.size());
+            output_file_->write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
+            output_file_->write(topic.name.c_str(), name_len);
+            uint32_t type_len = static_cast<uint32_t>(topic.type.size());
+            output_file_->write(reinterpret_cast<const char*>(&type_len), sizeof(type_len));
+            output_file_->write(topic.type.c_str(), type_len);
+            output_file_->flush();
         }
     }
     
@@ -831,21 +977,19 @@ public:
         if (!is_open_ || !is_writing_) {
             throw std::runtime_error("Storage is not open for writing");
         }
-        
-        if (!filename_.empty()) {
-            std::ofstream file(filename_, std::ios::binary | std::ios::app);
-            if (file.is_open()) {
-                file.write("M", 1);
-                uint32_t topic_len = static_cast<uint32_t>(topic.size());
-                file.write(reinterpret_cast<const char*>(&topic_len), sizeof(topic_len));
-                file.write(topic.c_str(), topic_len);
-                uint32_t msg_size = static_cast<uint32_t>(data_size);
-                file.write(reinterpret_cast<const char*>(&msg_size), sizeof(msg_size));
-                file.write(reinterpret_cast<const char*>(data), data_size);
-                file.write(reinterpret_cast<const char*>(&timestamp_ns), sizeof(timestamp_ns));
-                file.close();
-            }
+        if (!output_file_ || !output_file_->is_open()) {
+            throw std::runtime_error("Output file is not open");
         }
+        
+        output_file_->write("M", 1);
+        uint32_t topic_len = static_cast<uint32_t>(topic.size());
+        output_file_->write(reinterpret_cast<const char*>(&topic_len), sizeof(topic_len));
+        output_file_->write(topic.c_str(), topic_len);
+        uint32_t msg_size = static_cast<uint32_t>(data_size);
+        output_file_->write(reinterpret_cast<const char*>(&msg_size), sizeof(msg_size));
+        output_file_->write(reinterpret_cast<const char*>(data), data_size);
+        output_file_->write(reinterpret_cast<const char*>(&timestamp_ns), sizeof(timestamp_ns));
+        output_file_->flush();
         
         if (message_count_ == 0) {
             start_time_ns_ = timestamp_ns;
@@ -887,6 +1031,7 @@ private:
     std::string filename_;
     bool is_open_ = false;
     bool is_writing_ = false;
+    std::unique_ptr<std::ofstream> output_file_;
     uint64_t message_count_ = 0;
     uint64_t start_time_ns_ = 0;
     uint64_t end_time_ns_ = 0;

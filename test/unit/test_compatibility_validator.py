@@ -43,6 +43,12 @@ class TestCompatibilityValidator(unittest.TestCase):
             serialization_format='cdr'
         )
         writer.create_topic(topic_meta)
+        
+        # Write at least one message so the topic is persisted
+        msg = String()
+        msg.data = "test message"
+        writer.write_message('/test_topic', msg)
+        
         writer.close()
         
         # Validate for ROS2

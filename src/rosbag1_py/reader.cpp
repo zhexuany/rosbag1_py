@@ -1,10 +1,26 @@
+// Copyright 2025 Zhexuan Yang
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "rosbag1_py/reader.hpp"
 #include "rosbag1_py/storage.hpp"
 #include <stdexcept>
 #include <algorithm>
 #include <fstream>
 #include <map>
+#include <unordered_set>
 #include <cstddef>
+#include <iostream>
 #include <mcap/reader.hpp>
 #include <mcap/types.hpp>
 
@@ -70,6 +86,9 @@ void Reader::read_messages(
     if (!is_open_) {
         throw std::runtime_error("Reader is not open");
     }
+    
+    // Convert topic filters to unordered_set for O(1) lookup
+    std::unordered_set<std::string> topic_filter_set(topic_filters.begin(), topic_filters.end());
     
     // Get all topics to map topic names
     auto topics = storage_->get_topics();
@@ -176,7 +195,12 @@ void Reader::read_messages(
         
         // Read messages using MCAP reader and call callback
         auto message_view = reader.readMessages();
+        size_t total_messages = 0;
+        size_t filtered_messages = 0;
+        size_t callback_called = 0;
+        
         for (const auto& msg_view : message_view) {
+            total_messages++;
             // In MCAP v2.x, MessageView is the iterator result
             const mcap::MessageView& view = msg_view;
             const mcap::Message& mcap_msg = view.message;
@@ -198,16 +222,10 @@ void Reader::read_messages(
             }
             std::string topic_name = channel_it->second;
             
-            // Apply topic filter
-            if (!topic_filters.empty()) {
-                bool matches = false;
-                for (const auto& filter : topic_filters) {
-                    if (topic_name == filter) {
-                        matches = true;
-                        break;
-                    }
-                }
-                if (!matches) {
+            // Apply topic filter (O(1) lookup)
+            if (!topic_filter_set.empty()) {
+                if (topic_filter_set.find(topic_name) == topic_filter_set.end()) {
+                    filtered_messages++;
                     continue;
                 }
             }
@@ -231,11 +249,13 @@ void Reader::read_messages(
             }
             
             try {
+                callback_called++;
                 callback(msg);
             } catch (...) {
                 // If callback throws, we continue reading
             }
         }
+        
         reader.close();
         file.close();
     } else if (filename.find(".db") != std::string::npos || filename.find(".sqlite") != std::string::npos) {
@@ -244,90 +264,9 @@ void Reader::read_messages(
         if (file.is_open()) {
             file.seekg(6);  // Skip "SQLITE" header
             
-            // Read through file, skipping topics and calling callback for messages
-            char marker;
-            while (true) {
-                file.read(&marker, 1);
-                if (file.eof() || file.fail()) {
-                    break;
-                }
-                
-                if (marker == 'T') {
-                    // Skip topic metadata
-                    uint32_t id;
-                    if (!file.read(reinterpret_cast<char*>(&id), sizeof(id))) break;
-                    uint32_t name_len;
-                    if (!file.read(reinterpret_cast<char*>(&name_len), sizeof(name_len))) break;
-                    file.seekg(name_len, std::ios::cur);
-                    uint32_t type_len;
-                    if (!file.read(reinterpret_cast<char*>(&type_len), sizeof(type_len))) break;
-                    file.seekg(type_len, std::ios::cur);
-                    continue;
-                } else if (marker == 'M') {
-                    // Read message
-                    uint32_t topic_len = 0;
-                    file.read(reinterpret_cast<char*>(&topic_len), sizeof(topic_len));
-                    if (file.eof() || file.fail() || topic_len == 0) break;
-                    
-                    std::string topic_name(topic_len, '\0');
-                    file.read(&topic_name[0], topic_len);
-                    if (file.eof() || file.fail()) break;
-                    
-                    // Apply topic filter
-                    if (!topic_filters.empty()) {
-                        bool matches = false;
-                        for (const auto& filter : topic_filters) {
-                            if (topic_name == filter) {
-                                matches = true;
-                                break;
-                            }
-                        }
-                        if (!matches) {
-                            uint32_t msg_size = 0;
-                            file.read(reinterpret_cast<char*>(&msg_size), sizeof(msg_size));
-                            if (file.eof() || file.fail()) break;
-                            file.seekg(msg_size + sizeof(uint64_t), std::ios::cur);
-                            continue;
-                        }
-                    }
-                    
-                    uint32_t msg_size = 0;
-                    file.read(reinterpret_cast<char*>(&msg_size), sizeof(msg_size));
-                    if (file.eof() || file.fail() || msg_size == 0) break;
-                    
-                    std::vector<uint8_t> data(msg_size);
-                    file.read(reinterpret_cast<char*>(data.data()), msg_size);
-                    if (file.eof() || file.fail()) break;
-                    
-                    uint64_t timestamp_ns = 0;
-                    file.read(reinterpret_cast<char*>(&timestamp_ns), sizeof(timestamp_ns));
-                    if (file.eof() || file.fail()) break;
-                    
-                    MessageData msg;
-                    msg.topic = topic_name;
-                    msg.data = data;
-                    msg.timestamp_ns = timestamp_ns;
-                    if (topic_map.find(topic_name) != topic_map.end()) {
-                        msg.type = topic_map[topic_name].type;
-                        msg.serialization_format = topic_map[topic_name].serialization_format;
-                    }
-                    
-                    try {
-                        callback(msg);
-                    } catch (...) {
-                        // Continue on callback exception
-                    }
-                } else {
-                    break;
-                }
-            }
-            file.close();
-        }
-    } else if (filename.find(".bag") != std::string::npos) {
-        // ROSBAG format - use simple format reading
-        std::ifstream file(filename, std::ios::binary);
-        if (file.is_open()) {
-            file.seekg(7);  // Skip "#ROSBAG" header
+            size_t total_messages = 0;
+            size_t filtered_messages = 0;
+            size_t callback_called = 0;
             
             // Read through file, skipping topics and calling callback for messages
             char marker;
@@ -349,6 +288,7 @@ void Reader::read_messages(
                     file.seekg(type_len, std::ios::cur);
                     continue;
                 } else if (marker == 'M') {
+                    total_messages++;
                     // Read message
                     uint32_t topic_len = 0;
                     file.read(reinterpret_cast<char*>(&topic_len), sizeof(topic_len));
@@ -358,16 +298,10 @@ void Reader::read_messages(
                     file.read(&topic_name[0], topic_len);
                     if (file.eof() || file.fail()) break;
                     
-                    // Apply topic filter
-                    if (!topic_filters.empty()) {
-                        bool matches = false;
-                        for (const auto& filter : topic_filters) {
-                            if (topic_name == filter) {
-                                matches = true;
-                                break;
-                            }
-                        }
-                        if (!matches) {
+                    // Apply topic filter (O(1) lookup)
+                    if (!topic_filter_set.empty()) {
+                        if (topic_filter_set.find(topic_name) == topic_filter_set.end()) {
+                            filtered_messages++;
                             uint32_t msg_size = 0;
                             file.read(reinterpret_cast<char*>(&msg_size), sizeof(msg_size));
                             if (file.eof() || file.fail()) break;
@@ -398,6 +332,7 @@ void Reader::read_messages(
                     }
                     
                     try {
+                        callback_called++;
                         callback(msg);
                     } catch (...) {
                         // Continue on callback exception
@@ -406,6 +341,93 @@ void Reader::read_messages(
                     break;
                 }
             }
+            
+            file.close();
+        }
+    } else if (filename.find(".bag") != std::string::npos) {
+        // ROSBAG format - use simple format reading
+        std::ifstream file(filename, std::ios::binary);
+        if (file.is_open()) {
+            file.seekg(7);  // Skip "#ROSBAG" header
+            
+            size_t total_messages = 0;
+            size_t filtered_messages = 0;
+            size_t callback_called = 0;
+            
+            // Read through file, skipping topics and calling callback for messages
+            char marker;
+            while (true) {
+                file.read(&marker, 1);
+                if (file.eof() || file.fail()) {
+                    break;
+                }
+                
+                if (marker == 'T') {
+                    // Skip topic metadata
+                    uint32_t id;
+                    if (!file.read(reinterpret_cast<char*>(&id), sizeof(id))) break;
+                    uint32_t name_len;
+                    if (!file.read(reinterpret_cast<char*>(&name_len), sizeof(name_len))) break;
+                    file.seekg(name_len, std::ios::cur);
+                    uint32_t type_len;
+                    if (!file.read(reinterpret_cast<char*>(&type_len), sizeof(type_len))) break;
+                    file.seekg(type_len, std::ios::cur);
+                    continue;
+                } else if (marker == 'M') {
+                    total_messages++;
+                    // Read message
+                    uint32_t topic_len = 0;
+                    file.read(reinterpret_cast<char*>(&topic_len), sizeof(topic_len));
+                    if (file.eof() || file.fail() || topic_len == 0) break;
+                    
+                    std::string topic_name(topic_len, '\0');
+                    file.read(&topic_name[0], topic_len);
+                    if (file.eof() || file.fail()) break;
+                    
+                    // Apply topic filter (O(1) lookup)
+                    if (!topic_filter_set.empty()) {
+                        if (topic_filter_set.find(topic_name) == topic_filter_set.end()) {
+                            filtered_messages++;
+                            uint32_t msg_size = 0;
+                            file.read(reinterpret_cast<char*>(&msg_size), sizeof(msg_size));
+                            if (file.eof() || file.fail()) break;
+                            file.seekg(msg_size + sizeof(uint64_t), std::ios::cur);
+                            continue;
+                        }
+                    }
+                    
+                    uint32_t msg_size = 0;
+                    file.read(reinterpret_cast<char*>(&msg_size), sizeof(msg_size));
+                    if (file.eof() || file.fail() || msg_size == 0) break;
+                    
+                    std::vector<uint8_t> data(msg_size);
+                    file.read(reinterpret_cast<char*>(data.data()), msg_size);
+                    if (file.eof() || file.fail()) break;
+                    
+                    uint64_t timestamp_ns = 0;
+                    file.read(reinterpret_cast<char*>(&timestamp_ns), sizeof(timestamp_ns));
+                    if (file.eof() || file.fail()) break;
+                    
+                    MessageData msg;
+                    msg.topic = topic_name;
+                    msg.data = data;
+                    msg.timestamp_ns = timestamp_ns;
+                    if (topic_map.find(topic_name) != topic_map.end()) {
+                        msg.type = topic_map[topic_name].type;
+                        msg.serialization_format = topic_map[topic_name].serialization_format;
+                    }
+                    
+                    try {
+                        callback_called++;
+                        callback(msg);
+                    } catch (...) {
+                        // Continue on callback exception
+                    }
+                } else {
+                    break;
+                }
+            }
+            
             file.close();
         }
     }
@@ -421,6 +443,9 @@ std::vector<MessageData> Reader::read_messages(
     }
     
     std::vector<MessageData> messages;
+    
+    // Convert topic filters to unordered_set for O(1) lookup
+    std::unordered_set<std::string> topic_filter_set(topic_filters.begin(), topic_filters.end());
     
     // Get all topics to map topic names
     auto topics = storage_->get_topics();
@@ -514,16 +539,9 @@ std::vector<MessageData> Reader::read_messages(
                     }
                     std::string topic_name = channel_it->second;
                     
-                    // Apply topic filter
-                    if (!topic_filters.empty()) {
-                        bool matches = false;
-                        for (const auto& filter : topic_filters) {
-                            if (topic_name == filter) {
-                                matches = true;
-                                break;
-                            }
-                        }
-                        if (!matches) {
+                    // Apply topic filter (O(1) lookup)
+                    if (!topic_filter_set.empty()) {
+                        if (topic_filter_set.find(topic_name) == topic_filter_set.end()) {
                             continue;
                         }
                     }
@@ -604,16 +622,9 @@ std::vector<MessageData> Reader::read_messages(
                     file.read(&topic_name[0], topic_len);
                     if (file.eof() || file.fail()) break;
                     
-                    // Apply topic filter
-                    if (!topic_filters.empty()) {
-                        bool matches = false;
-                        for (const auto& filter : topic_filters) {
-                            if (topic_name == filter) {
-                                matches = true;
-                                break;
-                            }
-                        }
-                        if (!matches) {
+                    // Apply topic filter (O(1) lookup)
+                    if (!topic_filter_set.empty()) {
+                        if (topic_filter_set.find(topic_name) == topic_filter_set.end()) {
                             // Skip this message - read past it
                             uint32_t msg_size = 0;
                             file.read(reinterpret_cast<char*>(&msg_size), sizeof(msg_size));

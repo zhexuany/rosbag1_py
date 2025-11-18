@@ -42,15 +42,21 @@ RUN rosdep init || true
 
 # Install Python dependencies (CACHED - only rebuilds if requirements change)
 # Install pybind11 with CMake support so CMake can find it
-RUN pip3 install --upgrade pip setuptools wheel && \
-    pip3 install \
+# DON'T upgrade pip to avoid breaking system package paths
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+RUN python3 -m pip install \
     pybind11[global]>=2.10.0 \
     pytest>=6.0 \
     pytest-cov \
     pytest-timeout \
-    typing_extensions && \
+    typing_extensions \
+    catkin-pkg \
+    empy \
+    rospkg && \
     # Verify pybind11 CMake files are available
-    python3 -c "import pybind11; print('pybind11 path:', pybind11.get_cmake_dir())"
+    python3 -c "import pybind11; print('pybind11 path:', pybind11.get_cmake_dir())" && \
+    # Verify catkin_pkg is accessible
+    python3 -c "import catkin_pkg; print('catkin_pkg found:', catkin_pkg.__file__)"
 
 # Set up ROS1 environment (CACHED)
 RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc && \

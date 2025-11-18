@@ -1,14 +1,29 @@
+// Copyright 2025 Zhexuan Yang
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "rosbag1_py/writer.hpp"
 #include "rosbag1_py/storage.hpp"
 #include "rosbag1_py/compression.hpp"
 #include "rosbag1_py/splitting.hpp"
+#include "rosbag1_py/constants.hpp"
 #include <stdexcept>
 #include <map>
 #include <algorithm>
 
 namespace rosbag1_py {
 
-Writer::Writer() : splitter_(nullptr), is_open_(false), message_count_(0) {
+Writer::Writer() : splitter_(nullptr), compressor_(nullptr), is_open_(false), message_count_(0) {
 }
 
 Writer::~Writer() {
@@ -29,7 +44,7 @@ void Writer::open(
     
     storage_options_ = storage_options;
     // Ensure append mode is set for writing
-    storage_options_.append = storage_options.append || true;
+    storage_options_.append = true;
     converter_options_ = converter_options;
     compression_options_ = compression_options;
     split_options_ = split_options;
@@ -37,10 +52,26 @@ void Writer::open(
     
     // Create splitter if splitting is enabled (any non-default value indicates splitting)
     if (split_options_.mode != SplitMode::SIZE || 
-        split_options_.max_size != 1024ULL * 1024ULL * 1024ULL ||
-        split_options_.max_duration != 300.0 ||
-        split_options_.max_messages != 100000) {
+        split_options_.max_size != DEFAULT_MAX_SIZE_BYTES ||
+        split_options_.max_duration != DEFAULT_MAX_DURATION_SECONDS ||
+        split_options_.max_messages != DEFAULT_MAX_MESSAGES) {
         splitter_ = std::make_unique<BagSplitter>(split_options_);
+    }
+    
+    // Create and cache compressor if compression is enabled
+    if (compression_options_.compression_mode != CompressionMode::NONE) {
+        std::string compression_name;
+        switch (compression_options_.compression_mode) {
+            case CompressionMode::BZ2: compression_name = "bz2"; break;
+            case CompressionMode::LZ4: compression_name = "lz4"; break;
+            case CompressionMode::ZSTD: compression_name = "zstd"; break;
+            case CompressionMode::GZIP: compression_name = "gzip"; break;
+            default: break;
+        }
+        
+        if (!compression_name.empty()) {
+            compressor_ = CompressionFactory::create(compression_name);
+        }
     }
     
     // Create storage backend
@@ -65,6 +96,7 @@ void Writer::close() {
     }
     
     splitter_.reset();
+    compressor_.reset();
     is_open_ = false;
 }
 
@@ -95,38 +127,24 @@ void Writer::write_message(
         throw std::runtime_error("Topic not registered: " + topic);
     }
     
-    // Apply compression if enabled
+    // Apply compression if enabled (using cached compressor)
     const uint8_t* write_data = data;
     size_t write_size = data_size;
     std::vector<uint8_t> compressed_data;
     
-    if (compression_options_.compression_mode != CompressionMode::NONE) {
-        std::string compression_name;
-        switch (compression_options_.compression_mode) {
-            case CompressionMode::BZ2: compression_name = "bz2"; break;
-            case CompressionMode::LZ4: compression_name = "lz4"; break;
-            case CompressionMode::ZSTD: compression_name = "zstd"; break;
-            case CompressionMode::GZIP: compression_name = "gzip"; break;
-            default: break;
-        }
-        
-        if (!compression_name.empty()) {
-            auto compressor = CompressionFactory::create(compression_name);
-            if (compressor) {
-                compressed_data = compressor->compress(
-                    data,
-                    data_size,
-                    compression_options_.compression_level
-                );
-                write_data = compressed_data.data();
-                write_size = compressed_data.size();
-            }
-        }
+    if (compressor_) {
+        compressed_data = compressor_->compress(
+            data,
+            data_size,
+            compression_options_.compression_level
+        );
+        write_data = compressed_data.data();
+        write_size = compressed_data.size();
     }
     
     // Check if we need to split before writing
     if (splitter_) {
-        double timestamp_sec = timestamp_ns / 1e9;
+        double timestamp_sec = static_cast<double>(timestamp_ns) * SECONDS_PER_NANOSECOND;
         // Check if split is needed BEFORE writing (using current size + new message size)
         if (splitter_->should_split(timestamp_sec, write_size)) {
             switch_to_next_file();
@@ -139,7 +157,7 @@ void Writer::write_message(
     
     // Update splitter counters after writing
     if (splitter_) {
-        double timestamp_sec = timestamp_ns / 1e9;
+        double timestamp_sec = static_cast<double>(timestamp_ns) * SECONDS_PER_NANOSECOND;
         splitter_->update_counters(write_size, timestamp_sec);
     }
 }

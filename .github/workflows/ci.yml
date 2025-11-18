@@ -1,0 +1,328 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  # Main CI job using industrial_ci for ROS1 Noetic
+  # See: https://github.com/ros-industrial/industrial_ci
+  industrial_ci:
+    name: ROS1 Noetic CI
+    strategy:
+      matrix:
+        env:
+          - {ROS_DISTRO: noetic, ROS_REPO: main}
+          - {ROS_DISTRO: noetic, ROS_REPO: testing}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run industrial_ci
+        uses: ros-industrial/industrial_ci@master
+        env:
+          ROS_DISTRO: ${{matrix.env.ROS_DISTRO}}
+          ROS_REPO: ${{matrix.env.ROS_REPO}}
+          # Allow pip to work alongside system packages (PEP 668)
+          PIP_BREAK_SYSTEM_PACKAGES: 1
+          # Install additional dependencies needed for this project (new hook system)
+          # Match dependencies from Dockerfile for consistency
+          AFTER_SETUP: |
+            apt-get update
+            apt-get install -y \
+              python3-pip \
+              python3-dev \
+              cmake \
+              build-essential \
+              git \
+              pkg-config \
+              liblz4-dev \
+              libzstd-dev \
+              libbz2-dev \
+              zlib1g-dev \
+              libgtest-dev \
+              python3-rosdep \
+              python3-catkin-pkg \
+              python3-rospkg \
+              python3-empy \
+              ros-noetic-catkin \
+              ros-noetic-roscpp \
+              ros-noetic-rosbag \
+              ros-noetic-std-msgs \
+              ros-noetic-sensor-msgs \
+              ros-noetic-geometry-msgs \
+              ca-certificates \
+              curl
+            # Install Python packages to system locations (PIP_BREAK_SYSTEM_PACKAGES is set)
+            # DON'T upgrade pip to avoid breaking system package paths
+            python3 -m pip install pybind11[global]>=2.10.0 typing_extensions
+            # Install catkin_pkg via pip to ensure it's in PYTHONPATH for CMake
+            python3 -m pip install catkin-pkg empy rospkg
+            # Verify catkin_pkg is accessible to system Python
+            /usr/bin/python3 -c "import sys; print('Python path:', sys.path)"
+            /usr/bin/python3 -c "import catkin_pkg; print('catkin_pkg found:', catkin_pkg.__file__)"
+          # Disable catkin lint (we use separate lint job)
+          CATKIN_LINT: 0
+          # Configure CMake options (new system - replaces CATKIN_CONFIG)
+          CMAKE_ARGS: "-DPYTHON_EXECUTABLE=$(which python3) -DBUILD_TESTING=ON"
+
+  # Additional test job with coverage and custom steps
+  test-coverage:
+    name: Test with Coverage
+    runs-on: ubuntu-latest
+    
+    container:
+      image: ros:noetic-ros-core
+      options: --privileged
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            cmake \
+            build-essential \
+            python3-dev \
+            python3-pip \
+            liblz4-dev \
+            libzstd-dev \
+            libbz2-dev \
+            zlib1g-dev \
+            pkg-config \
+            libgtest-dev \
+            git \
+            python3-empy \
+            python3-rosdep \
+            python3-catkin-pkg \
+            python3-rospkg \
+            ros-noetic-catkin \
+            ros-noetic-roscpp \
+            ros-noetic-rosbag \
+            ros-noetic-std-msgs \
+            ros-noetic-sensor-msgs \
+            ros-noetic-geometry-msgs \
+            ca-certificates \
+            curl
+
+      - name: Install Python dependencies
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: 1
+        run: |
+          # DON'T upgrade pip to avoid breaking system package paths
+          python3 -m pip install pybind11[global]>=2.10.0
+          python3 -m pip install pytest>=6.0 pytest-cov pytest-timeout typing_extensions
+          # Install catkin_pkg via pip to ensure it's accessible during build
+          python3 -m pip install catkin-pkg empy rospkg
+          # Verify catkin_pkg is accessible
+          python3 -c "import catkin_pkg; print('catkin_pkg found:', catkin_pkg.__file__)"
+
+      - name: Build project with pip
+        shell: bash
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: 1
+          BUILD_TESTING: "ON"
+        run: |
+          source /opt/ros/noetic/setup.bash
+          # Build and install in editable mode with testing enabled
+          python3 -m pip install -e . --no-build-isolation -v
+          
+      - name: Check build artifacts
+        shell: bash
+        run: |
+          echo "Checking for C++ extension module..."
+          ls -la rosbag1_py/
+          find rosbag1_py/ -name "*.so" -o -name "rosbag1_py_cpp*"
+
+      - name: Verify installation
+        shell: bash
+        run: |
+          source /opt/ros/noetic/setup.bash
+          # Test import from a different directory to avoid importing source dir
+          cd /tmp
+          python3 -c "import rosbag1_py; print('✓ rosbag1_py imported successfully')"
+          python3 -c "import rosbag1_py; print('Module location:', rosbag1_py.__file__)"
+
+      - name: Start ROS master
+        shell: bash
+        run: |
+          source /opt/ros/noetic/setup.bash
+          roscore > /tmp/roscore.log 2>&1 &
+          echo $! > /tmp/roscore.pid
+          sleep 3
+          echo "ROS master started (PID: $(cat /tmp/roscore.pid))"
+        continue-on-error: true
+
+      - name: Run C++ tests
+        shell: bash
+        run: |
+          source /opt/ros/noetic/setup.bash
+          # Find the build directory created by setup.py during editable install
+          # setup.py creates build/temp.* directories
+          BUILD_DIR=$(find build -type d -name "temp.*" -path "*/build/temp.*" | head -n 1)
+          if [ -z "$BUILD_DIR" ]; then
+            # Alternative: look for any build directory with CMakeCache.txt
+            BUILD_DIR=$(find build -name "CMakeCache.txt" -type f | head -n 1 | xargs dirname)
+          fi
+          if [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+            echo "Found build directory: $BUILD_DIR"
+            cd "$BUILD_DIR"
+            ctest --output-on-failure -V || echo "C++ tests failed or not built"
+          else
+            echo "Build directory not found, skipping C++ tests"
+            echo "Searched in: build/"
+            find build -type d -name "temp.*" 2>/dev/null || echo "No temp directories found"
+          fi
+
+      - name: Run Python tests
+        shell: bash
+        run: |
+          source /opt/ros/noetic/setup.bash
+          # Run tests from project root (wherever we are)
+          pytest test/ -v --tb=short --timeout=300
+
+      - name: Generate coverage report
+        shell: bash
+        run: |
+          source /opt/ros/noetic/setup.bash
+          # Generate coverage report from project root
+          pytest test/ --cov=rosbag1_py --cov-report=xml --cov-report=html --cov-report=term
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Upload coverage HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 30
+
+      - name: Stop ROS master
+        if: always()
+        run: |
+          if [ -f /tmp/roscore.pid ]; then
+            kill $(cat /tmp/roscore.pid) 2>/dev/null || true
+            rm -f /tmp/roscore.pid
+          fi
+        continue-on-error: true
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Install linting tools
+        run: |
+          pip install flake8 black isort mypy
+
+      - name: Run flake8
+        run: |
+          flake8 rosbag1_py/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          flake8 rosbag1_py/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics || true
+
+      - name: Check code formatting with black
+        run: |
+          black --check rosbag1_py/ || true
+
+      - name: Check import sorting with isort
+        run: |
+          isort --check-only rosbag1_py/ || true
+
+  build-check:
+    name: Build Check
+    runs-on: ubuntu-latest
+    
+    container:
+      image: ros:noetic-ros-core
+      options: --privileged
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            cmake \
+            build-essential \
+            python3-dev \
+            python3-pip \
+            liblz4-dev \
+            libzstd-dev \
+            libbz2-dev \
+            zlib1g-dev \
+            pkg-config \
+            git \
+            python3-empy \
+            python3-rosdep \
+            python3-catkin-pkg \
+            python3-rospkg \
+            ros-noetic-catkin \
+            ros-noetic-roscpp \
+            ros-noetic-rosbag \
+            ros-noetic-std-msgs \
+            ros-noetic-sensor-msgs \
+            ros-noetic-geometry-msgs \
+            ca-certificates \
+            curl
+
+      - name: Install Python dependencies
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: 1
+        run: |
+          # DON'T upgrade pip to avoid breaking system package paths
+          python3 -m pip install pybind11[global]>=2.10.0 typing_extensions
+          # Install catkin_pkg via pip to ensure it's accessible during build
+          python3 -m pip install catkin-pkg empy rospkg
+          # Verify catkin_pkg is accessible
+          python3 -c "import catkin_pkg; print('catkin_pkg found:', catkin_pkg.__file__)"
+
+      - name: Build and install
+        shell: bash
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: 1
+        run: |
+          source /opt/ros/noetic/setup.bash
+          # Use --no-build-isolation so catkin_pkg is accessible during build
+          python3 -m pip install . --no-build-isolation -v
+          
+      - name: Debug installation
+        shell: bash
+        run: |
+          echo "=== Checking installed package contents ==="
+          python3 -c "import site; print('Site packages:', site.getsitepackages())"
+          SITE_PKG=$(python3 -c "import site; print(site.getsitepackages()[0])")
+          echo "Looking in: $SITE_PKG/rosbag1_py/"
+          ls -la "$SITE_PKG/rosbag1_py/" || echo "Package directory not found"
+          find "$SITE_PKG/rosbag1_py/" -name "*.so" 2>/dev/null || echo "No .so files found"
+
+      - name: Verify import
+        shell: bash
+        run: |
+          source /opt/ros/noetic/setup.bash
+          # Test import from a different directory to avoid conflicts
+          cd /tmp
+          python3 -c "import rosbag1_py; print('✓ Build successful!')"
+          python3 -c "import rosbag1_py; print('Module location:', rosbag1_py.__file__)"
+

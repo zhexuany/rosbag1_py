@@ -1,3 +1,17 @@
+// Copyright 2025 Zhexuan Yang
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #ifndef ROSBAG1_PY_STORAGE_HPP
 #define ROSBAG1_PY_STORAGE_HPP
 
@@ -22,6 +36,31 @@ struct StorageOptions {
     StorageFormat storage_id = StorageFormat::MCAP;
     bool append = false;
     std::map<std::string, std::string> custom_data;
+};
+
+// MCAP writer options
+struct McapWriterOptions {
+    // Boolean flags
+    bool noChunkCRC = false;
+    bool noAttachmentCRC = false;
+    bool enableDataCRC = false;
+    bool noSummaryCRC = false;
+    bool noChunking = false;
+    bool noMessageIndex = false;
+    bool noSummary = false;
+    bool noMetadataIndex = false;
+    bool noChunkIndex = false;
+    bool noStatistics = false;
+    bool noSummaryOffsets = false;
+    bool forceCompression = false;
+    
+    // Numeric options
+    uint64_t chunkSize = 786432;  // Default 768KB
+    int compressionLevel = -1;  // -1 = default
+    
+    // String options
+    std::string compression = "Zstd";  // None, Lz4, Zstd
+    std::string preset_profile = "";  // fastwrite, none, or empty for custom
 };
 
 // Topic metadata
@@ -64,6 +103,9 @@ class StorageFactory {
 public:
     static std::unique_ptr<StorageInterface> create(StorageFormat format);
 };
+
+// Parse MCAP writer options from custom_data map
+McapWriterOptions parse_mcap_writer_options(const std::map<std::string, std::string>& custom_data);
 
 } // namespace rosbag1_py
 

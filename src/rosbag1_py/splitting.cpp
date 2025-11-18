@@ -1,3 +1,17 @@
+// Copyright 2025 Zhexuan Yang
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "rosbag1_py/splitting.hpp"
 #include <algorithm>
 #include <sstream>
@@ -29,7 +43,7 @@ BagSplitter::BagSplitter(const SplitOptions& options)
 {
 }
 
-bool BagSplitter::should_split(double current_time, size_t message_size) const {
+bool BagSplitter::should_split(double current_time, size_t message_size) {
     if (start_time_ == 0.0) {
         return false;
     }
@@ -52,7 +66,7 @@ bool BagSplitter::should_split(double current_time, size_t message_size) const {
 std::string BagSplitter::get_next_filename(
     const std::string& base_uri,
     const std::string& storage_id
-) const {
+) {
     fs::path path(base_uri);
     std::string basename = path.stem().string();
     std::string dirname = path.parent_path().string();

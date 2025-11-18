@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "cmake>=3.15", "pybind11>=2.10.0"]
+requires = ["setuptools>=45", "wheel", "cmake>=3.15", "pybind11>=2.10.0", "empy>=3.3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,7 @@ version = "1.0.0"
 description = "Production-ready Python API for ROS1 bag recording with MCAP support"
 readme = "README.md"
 requires-python = ">=3.6"
+dynamic = ["authors"]
 dependencies = [
     "pybind11>=2.10.0",
 ]
