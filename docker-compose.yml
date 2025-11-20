@@ -28,6 +28,8 @@ services:
     environment:
       - ROS_DISTRO=noetic
       - PYTHONUNBUFFERED=1
+      - PIP_BREAK_SYSTEM_PACKAGES=1
+      - BUILD_TESTING=ON
       - WITH_COVERAGE=${WITH_COVERAGE:-0}
     command: /workspace/scripts/docker_test.sh
 

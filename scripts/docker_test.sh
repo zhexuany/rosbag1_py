@@ -36,53 +36,69 @@ ROSCORE_PID=$!
 sleep 2  # Give roscore time to start
 echo "ROS master started (PID: $ROSCORE_PID)"
 
-# Build the project
-echo "Building rosbag1_py..."
-mkdir -p build
-cd build
+# Build the project using pip (matches CI approach)
+echo "Building rosbag1_py with pip..."
+# Set environment variables to match CI (must be set before pip install)
+export PIP_BREAK_SYSTEM_PACKAGES=1
+export BUILD_TESTING=ON
 
-# Configure with CMake
-echo "Configuring CMake..."
-cmake .. \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DPYTHON_EXECUTABLE=$(which python3)
+# Verify environment variables are set
+echo "Environment check:"
+echo "  PIP_BREAK_SYSTEM_PACKAGES=$PIP_BREAK_SYSTEM_PACKAGES"
+echo "  BUILD_TESTING=$BUILD_TESTING"
+echo ""
 
-# Build
-echo "Compiling..."
-make -j$(nproc)
-
-# Install C++ extension
-echo "Installing C++ extension..."
-make install || true
-
-cd ..
-
-# Install Python package
-echo "Installing Python package..."
-pip3 install -e . --no-build-isolation || pip3 install -e .
+# Install Python package in editable mode with testing enabled
+echo "Installing Python package with tests..."
+python3 -m pip install -e . --no-build-isolation -v
 
 # Verify installation
+echo ""
 echo "Verifying installation..."
+cd /tmp  # Avoid circular import from source directory
 python3 -c "import rosbag1_py; print('✓ rosbag1_py imported successfully')" || {
     echo "✗ Failed to import rosbag1_py"
     echo "Checking for compiled module..."
-    find . -name "*.so" -o -name "rosbag1_py_cpp*" | head -5
+    find /workspace -name "*.so" -o -name "rosbag1_py_cpp*" | head -5
     exit 1
 }
+cd /workspace
 
 # Run C++ tests
 echo ""
 echo "=========================================="
 echo "Running C++ tests..."
 echo "=========================================="
-cd build
-if ctest --output-on-failure; then
-    echo "✓ C++ tests passed"
+# Find the build directory created by setup.py (matches CI approach)
+BUILD_DIR=$(find build -type d -name "temp.*" -path "*/build/temp.*" | head -n 1)
+if [ -z "$BUILD_DIR" ]; then
+    # Alternative: look for any build directory with CMakeCache.txt
+    BUILD_DIR=$(find build -name "CMakeCache.txt" -type f | head -n 1 | xargs dirname)
+fi
+if [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ] && [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+    echo "Found build directory: $BUILD_DIR"
+    # Verify tests were built
+    if [ -d "$BUILD_DIR/test" ]; then
+        echo "Test directory found, checking for test executables..."
+        find "$BUILD_DIR/test" -type f -executable -name "test_*" | head -5
+    else
+        echo "⚠️  Warning: test directory not found in build directory"
+    fi
+    cd "$BUILD_DIR"
+    if ctest --output-on-failure -V; then
+        echo "✓ C++ tests passed"
+    else
+        echo "✗ C++ tests failed"
+        exit 1
+    fi
+    cd - > /dev/null
 else
-    echo "✗ C++ tests failed"
+    echo "✗ Build directory not found, cannot run C++ tests"
+    echo "Searched in: build/"
+    find build -type d -name "temp.*" 2>/dev/null || echo "No temp directories found"
+    echo "This usually means BUILD_TESTING=ON was not set during pip install"
     exit 1
 fi
-cd ..
 
 # Run Python tests
 echo ""
