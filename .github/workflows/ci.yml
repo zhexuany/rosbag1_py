@@ -57,13 +57,16 @@ jobs:
               ros-noetic-geometry-msgs \
               ca-certificates \
               curl
+            # Initialize rosdep (matches Dockerfile)
+            rosdep init || true
             # Install Python packages to system locations (PIP_BREAK_SYSTEM_PACKAGES is set)
             # DON'T upgrade pip to avoid breaking system package paths
             python3 -m pip install pybind11[global]>=2.10.0 typing_extensions
             # Install catkin_pkg via pip to ensure it's in PYTHONPATH for CMake
             python3 -m pip install catkin-pkg empy rospkg
+            # Verify pybind11 CMake files are available
+            python3 -c "import pybind11; print('pybind11 path:', pybind11.get_cmake_dir())"
             # Verify catkin_pkg is accessible to system Python
-            /usr/bin/python3 -c "import sys; print('Python path:', sys.path)"
             /usr/bin/python3 -c "import catkin_pkg; print('catkin_pkg found:', catkin_pkg.__file__)"
           # Disable catkin lint (we use separate lint job)
           CATKIN_LINT: 0
@@ -78,6 +81,13 @@ jobs:
     container:
       image: ros:noetic-ros-core
       options: --privileged
+      env:
+        # Match Dockerfile environment variables
+        DEBIAN_FRONTEND: noninteractive
+        ROS_DISTRO: noetic
+        PYTHONUNBUFFERED: 1
+        TZ: UTC
+        PIP_BREAK_SYSTEM_PACKAGES: 1
     
     steps:
       - name: Checkout code
@@ -87,21 +97,21 @@ jobs:
         run: |
           apt-get update
           apt-get install -y \
+            python3-pip \
+            python3-dev \
             cmake \
             build-essential \
-            python3-dev \
-            python3-pip \
+            git \
+            pkg-config \
             liblz4-dev \
             libzstd-dev \
             libbz2-dev \
             zlib1g-dev \
-            pkg-config \
             libgtest-dev \
-            git \
-            python3-empy \
             python3-rosdep \
             python3-catkin-pkg \
             python3-rospkg \
+            python3-empy \
             ros-noetic-catkin \
             ros-noetic-roscpp \
             ros-noetic-rosbag \
@@ -109,24 +119,35 @@ jobs:
             ros-noetic-sensor-msgs \
             ros-noetic-geometry-msgs \
             ca-certificates \
-            curl
+            curl \
+            && rm -rf /var/lib/apt/lists/*
+
+      - name: Initialize rosdep
+        run: |
+          # Initialize rosdep (matches Dockerfile)
+          rosdep init || true
 
       - name: Install Python dependencies
-        env:
-          PIP_BREAK_SYSTEM_PACKAGES: 1
         run: |
           # DON'T upgrade pip to avoid breaking system package paths
-          python3 -m pip install pybind11[global]>=2.10.0
-          python3 -m pip install pytest>=6.0 pytest-cov pytest-timeout typing_extensions
-          # Install catkin_pkg via pip to ensure it's accessible during build
-          python3 -m pip install catkin-pkg empy rospkg
+          # Match Dockerfile Python dependencies exactly
+          python3 -m pip install \
+            pybind11[global]>=2.10.0 \
+            pytest>=6.0 \
+            pytest-cov \
+            pytest-timeout \
+            typing_extensions \
+            catkin-pkg \
+            empy \
+            rospkg
+          # Verify pybind11 CMake files are available
+          python3 -c "import pybind11; print('pybind11 path:', pybind11.get_cmake_dir())"
           # Verify catkin_pkg is accessible
           python3 -c "import catkin_pkg; print('catkin_pkg found:', catkin_pkg.__file__)"
 
       - name: Build project with pip
         shell: bash
         env:
-          PIP_BREAK_SYSTEM_PACKAGES: 1
           BUILD_TESTING: "ON"
         run: |
           source /opt/ros/noetic/setup.bash
@@ -255,6 +276,13 @@ jobs:
     container:
       image: ros:noetic-ros-core
       options: --privileged
+      env:
+        # Match Dockerfile environment variables
+        DEBIAN_FRONTEND: noninteractive
+        ROS_DISTRO: noetic
+        PYTHONUNBUFFERED: 1
+        TZ: UTC
+        PIP_BREAK_SYSTEM_PACKAGES: 1
     
     steps:
       - name: Checkout code
@@ -264,20 +292,20 @@ jobs:
         run: |
           apt-get update
           apt-get install -y \
+            python3-pip \
+            python3-dev \
             cmake \
             build-essential \
-            python3-dev \
-            python3-pip \
+            git \
+            pkg-config \
             liblz4-dev \
             libzstd-dev \
             libbz2-dev \
             zlib1g-dev \
-            pkg-config \
-            git \
-            python3-empy \
             python3-rosdep \
             python3-catkin-pkg \
             python3-rospkg \
+            python3-empy \
             ros-noetic-catkin \
             ros-noetic-roscpp \
             ros-noetic-rosbag \
@@ -285,23 +313,31 @@ jobs:
             ros-noetic-sensor-msgs \
             ros-noetic-geometry-msgs \
             ca-certificates \
-            curl
+            curl \
+            && rm -rf /var/lib/apt/lists/*
+
+      - name: Initialize rosdep
+        run: |
+          # Initialize rosdep (matches Dockerfile)
+          rosdep init || true
 
       - name: Install Python dependencies
-        env:
-          PIP_BREAK_SYSTEM_PACKAGES: 1
         run: |
           # DON'T upgrade pip to avoid breaking system package paths
-          python3 -m pip install pybind11[global]>=2.10.0 typing_extensions
-          # Install catkin_pkg via pip to ensure it's accessible during build
-          python3 -m pip install catkin-pkg empy rospkg
+          # Match Dockerfile Python dependencies exactly
+          python3 -m pip install \
+            pybind11[global]>=2.10.0 \
+            typing_extensions \
+            catkin-pkg \
+            empy \
+            rospkg
+          # Verify pybind11 CMake files are available
+          python3 -c "import pybind11; print('pybind11 path:', pybind11.get_cmake_dir())"
           # Verify catkin_pkg is accessible
           python3 -c "import catkin_pkg; print('catkin_pkg found:', catkin_pkg.__file__)"
 
       - name: Build and install
         shell: bash
-        env:
-          PIP_BREAK_SYSTEM_PACKAGES: 1
         run: |
           source /opt/ros/noetic/setup.bash
           # Use --no-build-isolation so catkin_pkg is accessible during build
